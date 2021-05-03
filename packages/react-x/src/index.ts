@@ -1,84 +1,113 @@
-import { ListType, ObjectType, StructType } from 'farrow-schema'
+export type Fetch<K = unknown, V = unknown> = (key: K) => V
 
-export type Node = {
-  type: string
-  props: {} | null
-  children: ChildrenNode
+type Task<K = unknown, V = unknown> = (fetch: Fetch<K, V>) => V
+
+type Tasks<K = unknown, V = unknown> = (key: K) => Task<K, V> | null
+
+type Store<K, V> = Map<K, V>
+
+const busy = <K, V>(tasks: Tasks<K, V>, key: K, store: Store<K, V>): V => {
+  let cache: Store<K, V> = new Map()
+  let fetch: Fetch<K, V> = (key) => {
+    if (cache.has(key)) {
+      return cache.get(key)!
+    }
+
+    let task = tasks(key)
+
+    if (task === null) {
+      if (store.has(key)) {
+        let value = store.get(key)!
+        cache.set(key, value)
+        return value
+      }
+      throw new Error(`No value in store of key: ${key}`)
+    }
+
+    let value = task(fetch)
+
+    store.set(key, value)
+    cache.set(key, value)
+
+    return value
+  }
+
+  return fetch(key)
 }
 
-export type Renderable = {
-  render(): ChildNode | ChildrenNode
+const sprsh1: Tasks<string, number> = (key) => {
+  if (key === 'B1') {
+    return (fetch) => {
+      return fetch('A1') + fetch('A2')
+    }
+  }
+
+  if (key === 'B2') {
+    return (fetch) => {
+      return fetch('B1') * 2
+    }
+  }
+
+  return null
 }
 
-export type ChildNode = Node | Renderable | string | number | boolean | null | undefined
+const sprsh2: Tasks<string, number> = (key) => {
+  if (key === 'B1') {
+    return (fetch) => {
+      let c1 = fetch('C1')
+      if (c1 === 1) {
+        return fetch('B2')
+      }
+      return fetch('A2')
+    }
+  }
 
-export type ChildrenNode = ChildNode[]
+  if (key === 'B2') {
+    return (fetch) => {
+      let c1 = fetch('C1')
+      if (c1 === 1) {
+        return fetch('A1')
+      }
+      return fetch('B1')
+    }
+  }
 
-const make = <T extends Node['type'], P extends Node['props'], C extends Node['children']>(
-  type: T,
-  props: P,
-  ...children: C
-) => {
-  return {
-    type,
-    props,
-    children,
+  return null
+}
+
+const sprsh3: Tasks<string, number> = (key) => {
+  if (key === 'B1') {
+    return (fetch) => {
+      let c1 = fetch('C1')
+      return fetch(`A${c1}`)
+    }
+  }
+
+  return null
+}
+
+let store: Store<string, number> = new Map([
+  ['A1', 10],
+  ['A2', 20],
+])
+
+busy(sprsh1, 'B2', store)
+
+console.log('B1', store.get('B1'))
+console.log('B2', store.get('B2'))
+
+const fibonacci: Tasks<number, number> = (n) => {
+  if (n < 2) return null
+  return (fetch) => {
+    return fetch(n - 1) + fetch(n - 2)
   }
 }
 
-const makeFactory = <T extends Node['type']>(tagName: T) => <P extends Node['props'], C extends Node['children']>(
-  props: P,
-  ...children: C
-) => {
-  return make(tagName, props, ...children)
-}
+const fibonacciStore: Store<number, number> = new Map([
+  [0, 0],
+  [1, 1],
+])
 
-const Tag = {
-  div: makeFactory('div'),
-  span: makeFactory('span'),
-  h1: makeFactory('h1'),
-  h2: makeFactory('h2'),
-  h3: makeFactory('h3'),
-  h4: makeFactory('h4'),
-  header: makeFactory('header'),
-  footer: makeFactory('footer'),
-  section: makeFactory('section'),
-}
+busy(fibonacci, 15, fibonacciStore)
 
-// prettier-ignore
-const Header = () => {
-  return Tag.header(
-    { class: 'header' }, 
-    Tag.div(
-      null, 
-      Tag.span(
-        null, 
-        'title'
-      ))
-  )
-}
-
-export type ConsumerStart<T> = {
-  type: 'ConsumerStart'
-  start: () => ConsumerNext<T>
-  error: () => ConsumerError<T>
-}
-
-export type ConsumerNext<T> = {
-  type: 'ConsumerNext'
-  next: (value: T) => ConsumerNext<T>
-  error: () => ConsumerError<T>
-  finish: () => ConsumerFinish<T>
-}
-
-export type ConsumerError<T> = {
-  type: 'ConsumerError'
-  finish: () => ConsumerFinish<T>
-}
-
-export type ConsumerFinish<T> = {
-  type: 'ConsumerFinish'
-  start: () => ConsumerNext<T>
-}
-
-export type Consumer<T> = ConsumerStart<T> | ConsumerNext<T> | ConsumerError<T> | ConsumerFinish<T>
+console.log('fibonacci', JSON.stringify([...fibonacciStore.entries()]))

@@ -3,13 +3,6 @@
   "version": "0.0.1",
   "description": "An experimental implementation of react-like framework",
   "main": "dist/index.js",
-  "module": "esm/index.js",
-  "exports": {
-    ".": {
-      "import": "./esm/index.js",
-      "require": "./dist/index.js"
-    }
-  },
   "files": [
     "src",
     "dist",

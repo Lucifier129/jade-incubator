@@ -6,7 +6,85 @@ type Tasks<K = unknown, V = unknown> = (key: K) => Task<K, V> | null
 
 type Store<K, V> = Map<K, V>
 
-const busy = <K, V>(tasks: Tasks<K, V>, key: K, store: Store<K, V>): V => {
+type Build<K, V> = (tasks: Tasks<K, V>, key: K, store: Store<K, V>) => void
+
+type Rebuilder<K, V, I> = (key: K, value: V, task: Task<K, V>, info: I) => Task<K, V>
+
+type Scheduler<K, V, I> = (rebuilder: Rebuilder<K, V, I>) => Build<K, V>
+
+type Chain<K> = K[]
+
+type ExcelInfo<K> = {
+  isDirty: (key: K) => boolean
+  chain: Chain<K>
+}
+
+const dirtyBitRebuilder = <K, V>(key: K, value: V, task: Task<K, V>, info: ExcelInfo<K>): Task<K, V> => {
+  return (fetch) => {
+    if (info.isDirty(key)) {
+      return task(fetch)
+    }
+    return value
+  }
+}
+
+const restarting = <K, V>(rebuilder: Rebuilder<K, V, ExcelInfo<K>>) => (info: ExcelInfo<K>): Build<K, V> => {
+  return (tasks, target, store) => {
+    let go = (done: Set<K>, chain: Chain<K>): Chain<K> => {
+      if (chain.length === 0) {
+        return []
+      }
+
+      let [key, ...keys] = chain
+      let task = tasks(key)
+
+      if (task === null) {
+        return [key, ...go(done.add(key), keys)]
+      }
+
+      let value = store.get(key)
+
+      if (value === undefined) {
+        throw new Error(`${key} is not in store`)
+      }
+
+      let newTask = rebuilder(key, value, task, info)
+
+      let fetch = (key: K) => {
+        if (done.has(key)) {
+          let value = store.get(key)
+          if (value === undefined) {
+            throw new Error(`${key} is not in store`)
+          }
+          return value
+        }
+        throw {
+          __type: 'Dep',
+          key,
+        }
+      }
+
+      try {
+        let result = newTask(fetch)
+        store.set(key, result)
+        return [key, ...go(done.add(key), keys)]
+      } catch (error) {
+        if (error?.__type === 'Dep') {
+          return go(done, [error.key, ...keys.filter((key) => key !== error.key).concat(key)])
+        }
+        throw error
+      }
+    }
+
+    let newChain = go(new Set(), [...new Set(info.chain.concat(target))])
+
+    info.chain = newChain
+  }
+}
+
+const excel = restarting<string, number>(dirtyBitRebuilder)
+
+const busy = <K, V>(tasks: Tasks<K, V>, key: K, store: Store<K, V>) => {
   let cache: Store<K, V> = new Map()
   let fetch: Fetch<K, V> = (key) => {
     if (cache.has(key)) {
@@ -32,7 +110,7 @@ const busy = <K, V>(tasks: Tasks<K, V>, key: K, store: Store<K, V>): V => {
     return value
   }
 
-  return fetch(key)
+  fetch(key)
 }
 
 const sprsh1: Tasks<string, number> = (key) => {
@@ -171,9 +249,23 @@ let store: Store<string, number> = new Map([
   ['A2', 20],
 ])
 
-// busy(sprsh1, 'B2', store)
+busy(sprsh1, 'B2', store)
 
-busySprsh([A1, A2, B1, B2], B2, store)
+console.log('B1', store.get('B1'))
+console.log('B2', store.get('B2'))
+
+store.set('A1', 20)
+
+let excelInfo: ExcelInfo<string> = {
+  isDirty: (key) => {
+    return key === 'B2' || key === 'B1'
+  },
+  chain: [],
+}
+
+excel(excelInfo)(sprsh1, 'B2', store)
+
+console.log('excelInfo', excelInfo)
 
 console.log('B1', store.get('B1'))
 console.log('B2', store.get('B2'))

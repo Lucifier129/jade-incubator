@@ -72,7 +72,7 @@
     "no-self-assign": "error",
     "no-self-compare": "error",
     "no-sequences": "error",
-    "no-throw-literal": "error",
+    "no-throw-literal": "warn",
     "no-unmodified-loop-condition": "error",
     "no-useless-call": "error",
     "no-useless-catch": "error",

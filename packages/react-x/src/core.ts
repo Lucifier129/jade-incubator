@@ -1,8 +1,16 @@
 import { Reducers, CreateStoreOptions, ReducersToActions, createActions } from './store'
+import { Observable, BehaviorSubject, ReplaySubject } from 'rxjs'
+import { shareReplay } from 'rxjs/operators'
 
-export type InputState<T = unknown> = {
+export type InputState<T = unknown, U = T> = {
   kind: 'State.Input'
-  initialState: T
+  initialState: T | (() => T)
+  set?: (ctx: SetInputStateContext, newState: U) => void
+}
+
+export type SetInputStateContext = {
+  get<T>(State: InputState<T, any> | ReducerState<T, any> | DerivedState<T, any>): T
+  get<T>(AsyncState: DerivedAsyncState<T, any>): AsyncState<T>
 }
 
 export type ReducerState<S = unknown, RS extends Reducers<S> = Reducers<S>> = {
@@ -95,26 +103,32 @@ export const isOkStage = <T>(input: AsyncState<T>): input is OkAsyncState<T> => 
 }
 
 export type DerivedStateContext = {
-  get<T>(State: InputState<T> | ReducerState<T> | DerivedState<T>): T
-  get<T>(AsyncState: DerivedAsyncState<T>): AsyncState<T>
+  get<T>(State: InputState<T, any> | ReducerState<T> | DerivedState<T, any>): T
+  get<T>(AsyncState: DerivedAsyncState<T, any>): AsyncState<T>
 }
 
-export type DerivedState<T = unknown> = {
+export type DerivedState<T = unknown, U = T> = {
   kind: 'State.Derived'
   get: (ctx: DerivedStateContext) => T
+  set?: (ctx: DerivedStateContext, newState: U) => unknown
 }
 
 export type DerivedAsyncStateContext = {
-  get<T>(State: InputState<T> | ReducerState<T> | DerivedState<T>): T
-  get<T>(AsyncState: DerivedAsyncState<T>): Promise<T>
+  get<T>(State: InputState<T, any> | ReducerState<T> | DerivedState<T, any>): T
+  get<T>(AsyncState: DerivedAsyncState<T, any>): Promise<T>
 }
 
-export type DerivedAsyncState<T = unknown> = {
+export type DerivedAsyncState<T = unknown, U = T> = {
   kind: 'State.DerivedAsync'
   get: (ctx: DerivedAsyncStateContext) => Promise<T>
+  set?: (ctx: DerivedStateContext, newState: U) => unknown
 }
 
-export type StateDescription<T = unknown> = InputState<T> | ReducerState<T> | DerivedState<T> | DerivedAsyncState<T>
+export type StateDescription<T = unknown, U = T> =
+  | InputState<T, U>
+  | ReducerState<T>
+  | DerivedState<T, U>
+  | DerivedAsyncState<T, U>
 
 export type StateType<T> = T extends StateDescription<infer U> ? U : never
 
@@ -140,7 +154,7 @@ type ReducerStateOptions = {
   logger?: boolean
 }
 
-export function input<T>(initialState: T): InputState<T>
+export function input<T, U = T>(initialState: T | (() => T)): InputState<T, U>
 
 export function input<S, RS extends Reducers<S>>(
   initialState: S,
@@ -164,14 +178,14 @@ export function input(initialState: unknown, reducers?: Reducers, options?: Redu
   }
 }
 
-export const derived = <T>(options: Omit<DerivedState<T>, 'kind'>): DerivedState<T> => {
+export const derived = <T, U = T>(options: Omit<DerivedState<T, U>, 'kind'>): DerivedState<T, U> => {
   return {
     ...options,
     kind: 'State.Derived',
   }
 }
 
-export const derivedAsync = <T>(options: Omit<DerivedAsyncState<T>, 'kind'>): DerivedAsyncState<T> => {
+export const derivedAsync = <T, U = T>(options: Omit<DerivedAsyncState<T, U>, 'kind'>): DerivedAsyncState<T, U> => {
   return {
     ...options,
     kind: 'State.DerivedAsync',
@@ -291,7 +305,7 @@ export type StoreUnsubscribe = () => void
 
 export type Store = {
   get: DerivedStateContext['get']
-  set<T>(State: InputState<T> | ReducerState<T>, state: T): void
+  set<T, U = T>(State: StateDescription<T, U>, state: U): void
   getActions<S, RS extends Reducers<S>>(ReducerState: ReducerState<S, RS>): ReducersToActions<RS>
   subscribe<T>(State: StateDescription<T>, subscriber: StoreSubscriber<T>): StoreUnsubscribe
   publish(State: StateDescription): void
@@ -331,7 +345,7 @@ const getInputBuildNode = (buildInfo: BuildInfo, State: InputState): InputBuildN
     kind: 'BuildNode.Input',
     buildInfo,
     State,
-    value: State.initialState,
+    value: typeof State.initialState === 'function' ? State.initialState() : State.initialState,
     consumers: new Set(),
     isWip: false,
   }
@@ -573,12 +587,39 @@ export const createStore = (): Store => {
       throw new Error(`Unexpected State in get(...): ${State}`)
     },
     set: (State, state) => {
-      let buildNode = isInputState(State)
-        ? getInputBuildNode(buildInfo, State)
-        : getReducerBuildNode(buildInfo, State as ReducerState<unknown, Reducers<unknown>>)
+      let buildNode = getBuildNode(buildInfo, State as StateDescription)
 
       markDirty(buildNode, buildInfo.dirtyBuildNodeSet)
-      buildNode.value = state
+
+      if (isInputBuildNode(buildNode)) {
+        if (buildNode.State.set) {
+          buildNode.State.set(
+            {
+              get: buildInfo.get,
+            },
+            state,
+          )
+        } else {
+          buildNode.value = state
+        }
+      } else if (isReducerBuildNode(buildNode)) {
+        buildNode.value = state
+      } else if (isDerivedBuildNode(buildNode)) {
+        buildNode.State.set?.(
+          {
+            get: buildInfo.get,
+          },
+          state,
+        )
+      } else if (isDerivedAsyncBuildNode(buildNode)) {
+        buildNode.State.set?.(
+          {
+            get: buildInfo.get,
+          },
+          state,
+        )
+      }
+
       publishBuildNodeSet(buildInfo)
     },
     subscribe: (State, subscriber) => {
@@ -632,96 +673,42 @@ export const createStore = (): Store => {
   return store
 }
 
-const delay = (time: number) => {
+export const observable = <T>(initialState: T) => {
+  let Inner = input(() => {
+    let subject = new ReplaySubject<T>(1)
+    subject.next(initialState)
+    return subject
+  })
+
+  return derived<Observable<T>, T>({
+    get: (ctx) => {
+      return ctx.get(Inner).asObservable()
+    },
+    set: (ctx, state) => {
+      ctx.get(Inner).next(state)
+    },
+  })
+}
+
+export const derivedObservable = <T, U = T>(
+  options: Omit<DerivedState<Observable<T>, U>, 'kind'>,
+): DerivedState<Observable<T>, U> => {
+  return {
+    ...options,
+    get: (ctx) => {
+      return options.get(ctx).pipe(shareReplay(1))
+    },
+    kind: 'State.Derived',
+  }
+}
+
+export const $ = {
+  input: observable,
+  derived: derivedObservable,
+}
+
+export const delay = (time: number) => {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, time)
   })
 }
-
-const A1 = input(10)
-const A2 = input(20)
-
-const A3 = input(0, {
-  incre: (state: number, step = 1) => {
-    return state + step
-  },
-  decre: (state: number, step = 1) => {
-    return state - step
-  },
-})
-
-const B1 = derived({
-  get: (ctx) => {
-    let a1 = ctx.get(A1)
-    let a2 = ctx.get(A2)
-    let a3 = ctx.get(A3)
-    return a1 + a2 + a3
-  },
-})
-
-const B2 = derived({
-  get: (ctx) => {
-    let b1 = ctx.get(B1)
-    return b1 * 2
-  },
-})
-
-const C1 = derivedAsync({
-  get: async (ctx) => {
-    await delay(1000)
-    let b2 = ctx.get(B2)
-    return `c1: ${b2.toString()}`
-  },
-})
-
-const C2 = derived({
-  get: (ctx) => {
-    let c1 = ctx.get(C1)
-
-    return matchAsyncState(c1, {
-      Pending: () => 'pending...',
-      Error: (error) => `error: ${error.message}`,
-      Ok: (state) => `ok: ${state}`,
-    })
-  },
-})
-
-const store = createStore()
-
-const log = (name: string) => () => {
-  let c1 = store.get(C1)
-  let c2 = store.get(C2)
-  let a1 = store.get(A1)
-  let a2 = store.get(A2)
-  let a3 = store.get(A3)
-  let b1 = store.get(B1)
-  let b2 = store.get(B2)
-
-  console.log(name, {
-    a1,
-    a2,
-    a3,
-    b1,
-    b2,
-    c1,
-    c2,
-  })
-}
-
-store.subscribe(A1, log('A1'))
-store.subscribe(A2, log('A2'))
-store.subscribe(A3, log('A3'))
-store.subscribe(B1, log('B1'))
-store.subscribe(B2, log('B2'))
-store.subscribe(C1, log('C1'))
-store.subscribe(C2, log('C2'))
-
-log('init')()
-
-store.set(A1, 11)
-store.set(A2, 21)
-
-setTimeout(() => {
-  console.log('setTimeout')
-  store.getActions(A3).incre(10)
-}, 2000)

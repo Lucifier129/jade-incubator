@@ -30,6 +30,7 @@
     "farrow-schema": "^1.10.1",
     "farrow-module": "^1.8.0",
     "redux": "^4.1.0",
-    "redux-logger": "^3.0.6"
+    "redux-logger": "^3.0.6",
+    "rxjs": "^7.0.0"
   }
 }

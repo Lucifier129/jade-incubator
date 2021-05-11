@@ -1,10 +1,11 @@
-import { $, input, derived, derivedAsync, delay, matchAsyncState, createStore } from './core'
-import { combineLatest, interval, pipe } from 'rxjs'
+import { createStore } from './core'
+import { input, derived } from './observable'
+import { combineLatest, interval } from 'rxjs'
 import { debounceTime, map, switchMap } from 'rxjs/operators'
 
-const A1 = $.input(10)
-const A2 = $.input(20)
-const A3 = $.derived({
+const A1 = input(10)
+const A2 = input(20)
+const A3 = derived({
   get: (ctx) => {
     return ctx.get(A1).pipe(
       switchMap((a1) => {
@@ -15,7 +16,7 @@ const A3 = $.derived({
   },
 })
 
-const B1 = $.derived({
+const B1 = derived({
   get: (ctx) => {
     let pair$ = combineLatest({
       a1: ctx.get(A1),
@@ -30,13 +31,13 @@ const B1 = $.derived({
   },
 })
 
-const B2 = $.derived({
+const B2 = derived({
   get: (ctx) => {
     return ctx.get(B1).pipe(map((b1) => b1 * 2))
   },
 })
 
-const C1 = $.derived({
+const C1 = derived({
   get: (ctx) => {
     return ctx.get(B2).pipe(
       switchMap(async (b2) => {

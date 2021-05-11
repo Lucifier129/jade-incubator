@@ -1,6 +1,4 @@
 import { Reducers, CreateStoreOptions, ReducersToActions, createActions } from './store'
-import { Observable, BehaviorSubject, ReplaySubject } from 'rxjs'
-import { shareReplay } from 'rxjs/operators'
 
 export type InputState<T = unknown, U = T> = {
   kind: 'State.Input'
@@ -105,6 +103,7 @@ export const isOkStage = <T>(input: AsyncState<T>): input is OkAsyncState<T> => 
 export type DerivedStateContext = {
   get<T>(State: InputState<T, any> | ReducerState<T> | DerivedState<T, any>): T
   get<T>(AsyncState: DerivedAsyncState<T, any>): AsyncState<T>
+  get<T>(State: StateDescription<T>): typeof State extends DerivedAsyncState<T, any> ? AsyncState<T> : T
 }
 
 export type DerivedState<T = unknown, U = T> = {
@@ -307,8 +306,8 @@ export type Store = {
   get: DerivedStateContext['get']
   set<T, U = T>(State: StateDescription<T, U>, state: U): void
   getActions<S, RS extends Reducers<S>>(ReducerState: ReducerState<S, RS>): ReducersToActions<RS>
-  subscribe<T>(State: StateDescription<T>, subscriber: StoreSubscriber<T>): StoreUnsubscribe
-  publish(State: StateDescription): void
+  subscribe<T>(State: StateDescription<T, any>, subscriber: StoreSubscriber<T>): StoreUnsubscribe
+  publish(State: StateDescription<any>): void
 }
 
 export const syncStateStore = <K, V>(target: Map<K, V>, source: Map<K, V>) => {
@@ -407,10 +406,10 @@ const getDerivedAsyncBuildNode = (buildInfo: BuildInfo, State: DerivedAsyncState
   return derivedAsyncBuildNode
 }
 
-const markDirty = (buildNode: BuildNode, dirtyBuildNodeSet: BuildNodeSet = new Set()): BuildNodeSet => {
+const markDirty = (buildNode: BuildNode) => {
   buildNode.isWip = true
 
-  dirtyBuildNodeSet.add(buildNode)
+  buildNode.buildInfo.dirtyBuildNodeSet.add(buildNode)
 
   if (isDerivedBuildNode(buildNode) || isDerivedAsyncBuildNode(buildNode)) {
     if (isCleanStateValue(buildNode.state)) {
@@ -426,8 +425,6 @@ const markDirty = (buildNode: BuildNode, dirtyBuildNodeSet: BuildNodeSet = new S
   }
 
   buildNode.isWip = false
-
-  return dirtyBuildNodeSet
 }
 
 const getBuildNode = (buildInfo: BuildInfo, State: StateDescription): BuildNode => {
@@ -538,7 +535,7 @@ const compute = (buildNode: DerivableBuildNode) => {
     promise
       .then((state) => {
         if (isOutdated()) return
-        markDirty(buildNode, buildNode.buildInfo.dirtyBuildNodeSet)
+        markDirty(buildNode)
         buildNode.state = {
           kind: 'StateValue.Clean',
           cleanValue: OkAsyncState(state),
@@ -547,7 +544,7 @@ const compute = (buildNode: DerivableBuildNode) => {
       })
       .catch((error) => {
         if (isOutdated()) return
-        markDirty(buildNode, buildNode.buildInfo.dirtyBuildNodeSet)
+        markDirty(buildNode)
         buildNode.state = {
           kind: 'StateValue.Clean',
           cleanValue: ErrorAsyncState(error),
@@ -589,7 +586,7 @@ export const createStore = (): Store => {
     set: (State, state) => {
       let buildNode = getBuildNode(buildInfo, State as StateDescription)
 
-      markDirty(buildNode, buildInfo.dirtyBuildNodeSet)
+      markDirty(buildNode)
 
       if (isInputBuildNode(buildNode)) {
         if (buildNode.State.set) {
@@ -627,12 +624,15 @@ export const createStore = (): Store => {
       subscriberStorage.set(State as StateDescription, subscribers)
 
       subscribers.add(subscriber as StoreSubscriber)
+
+      subscriber(store.get(State))
+
       return () => {
         subscribers.delete(subscriber as StoreSubscriber)
       }
     },
     publish: (State) => {
-      let state = store.get(State as any)
+      let state = store.get(State)
       let subscribers = subscriberStorage.get(State as StateDescription) ?? new Set()
       subscriberStorage.set(State as StateDescription, subscribers)
 
@@ -671,40 +671,6 @@ export const createStore = (): Store => {
   }
 
   return store
-}
-
-export const observable = <T>(initialState: T) => {
-  let Inner = input(() => {
-    let subject = new ReplaySubject<T>(1)
-    subject.next(initialState)
-    return subject
-  })
-
-  return derived<Observable<T>, T>({
-    get: (ctx) => {
-      return ctx.get(Inner).asObservable()
-    },
-    set: (ctx, state) => {
-      ctx.get(Inner).next(state)
-    },
-  })
-}
-
-export const derivedObservable = <T, U = T>(
-  options: Omit<DerivedState<Observable<T>, U>, 'kind'>,
-): DerivedState<Observable<T>, U> => {
-  return {
-    ...options,
-    get: (ctx) => {
-      return options.get(ctx).pipe(shareReplay(1))
-    },
-    kind: 'State.Derived',
-  }
-}
-
-export const $ = {
-  input: observable,
-  derived: derivedObservable,
 }
 
 export const delay = (time: number) => {

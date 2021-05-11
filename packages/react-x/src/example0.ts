@@ -30,8 +30,8 @@ const B2 = derived({
 
 const C1 = derivedAsync({
   get: async (ctx) => {
-    await delay(1000)
     let b2 = ctx.get(B2)
+    await delay(1000)
     return `c1: ${b2.toString()}`
   },
 })
@@ -59,15 +59,18 @@ const log = (name: string) => () => {
   let b1 = store.get(B1)
   let b2 = store.get(B2)
 
-  console.log(name, {
-    a1,
-    a2,
-    a3,
-    b1,
-    b2,
-    c1,
-    c2,
-  })
+  console.log(
+    JSON.stringify({
+      a1,
+      a2,
+      a3,
+      b1,
+      b2,
+      c1,
+      c2,
+    }),
+    name,
+  )
 }
 
 store.subscribe(A1, log('A1'))

@@ -1,4 +1,5 @@
-import { input, derived, derivedAsync, delay, matchAsyncState, createStore } from './core'
+import { input, derived, derivedAsync, delay, createStore } from './core'
+import { matchAsyncState } from './AsyncState'
 
 const A1 = input(10)
 const A2 = input(20)

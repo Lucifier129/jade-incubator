@@ -1,142 +1,49 @@
-import { Reducers, CreateStoreOptions, ReducersToActions, createActions } from './store'
+import {
+  AsyncState,
+  isPendingStage,
+  isErrorStage,
+  PendingAsyncState,
+  OkAsyncState,
+  ErrorAsyncState,
+} from './AsyncState'
+import { createDeferred } from './Deferred'
+import { Reducers, ReducersToActions, createActions } from './reducer'
+import { StateValue, isCleanStateValue } from './StateValue'
 
-export type InputState<T = unknown, U = T> = {
+export type InputState<S = unknown, RS extends Reducers<S> = Reducers<S>> = {
   kind: 'State.Input'
-  initialState: T | (() => T)
-  set?: (ctx: SetInputStateContext, newState: U) => void
+  initialState: S | (() => S)
+  reducers: RS
 }
 
-export type SetInputStateContext = {
-  get<T>(State: InputState<T, any> | ReducerState<T, any> | DerivedState<T, any>): T
+export type SyncStateContext = {
+  get<T>(State: InputState<T> | InputState<T> | DerivedState<T, any>): T
   get<T>(AsyncState: DerivedAsyncState<T, any>): AsyncState<T>
 }
 
-export type ReducerState<S = unknown, RS extends Reducers<S> = Reducers<S>> = {
-  kind: 'State.Reducer'
-} & CreateStoreOptions<S, RS>
-
-export type PendingAsyncState = {
-  kind: 'AsyncState.Pending'
-  isPending: true
-  isError: false
-  isOk: false
-}
-
-export type ErrorAsyncState = {
-  kind: 'AsyncState.Error'
-  error: Error
-  isPending: false
-  isError: true
-  isOk: false
-}
-
-export type OkAsyncState<T = unknown> = {
-  kind: 'AsyncState.Ok'
-  state: T
-  isPending: false
-  isError: false
-  isOk: true
-}
-
-export type AsyncState<T = unknown> = PendingAsyncState | ErrorAsyncState | OkAsyncState<T>
-
-export type AsyncStateVisitors<T, R> = {
-  Pending: () => R
-  Error: (error: Error) => R
-  Ok: (value: T) => R
-}
-
-export const matchAsyncState = <T, R>(asyncState: AsyncState<T>, visitors: AsyncStateVisitors<T, R>): R => {
-  if (asyncState.isPending) {
-    return visitors.Pending()
-  }
-  if (asyncState.isError) {
-    return visitors.Error(asyncState.error)
-  }
-  if (asyncState.isOk) {
-    return visitors.Ok(asyncState.state)
-  }
-  throw new Error(`Unexpected async state: ${asyncState}`)
-}
-
-export const PendingAsyncState = (): PendingAsyncState => {
-  return {
-    kind: 'AsyncState.Pending',
-    isPending: true,
-    isError: false,
-    isOk: false,
-  }
-}
-
-export const ErrorAsyncState = (error: Error): ErrorAsyncState => {
-  return {
-    kind: 'AsyncState.Error',
-    error,
-    isPending: false,
-    isError: true,
-    isOk: false,
-  }
-}
-
-export const OkAsyncState = <T>(state: T): OkAsyncState<T> => {
-  return {
-    kind: 'AsyncState.Ok',
-    state,
-    isPending: false,
-    isError: false,
-    isOk: true,
-  }
-}
-
-export const isPendingStage = <T>(input: AsyncState<T>): input is PendingAsyncState => {
-  return input.kind === 'AsyncState.Pending'
-}
-
-export const isErrorStage = <T>(input: AsyncState<T>): input is ErrorAsyncState => {
-  return input.kind === 'AsyncState.Error'
-}
-
-export const isOkStage = <T>(input: AsyncState<T>): input is OkAsyncState<T> => {
-  return input.kind === 'AsyncState.Ok'
-}
-
-export type DerivedStateContext = {
-  get<T>(State: InputState<T, any> | ReducerState<T> | DerivedState<T, any>): T
-  get<T>(AsyncState: DerivedAsyncState<T, any>): AsyncState<T>
-  get<T>(State: StateDescription<T>): typeof State extends DerivedAsyncState<T, any> ? AsyncState<T> : T
+export type AsyncStateContext = {
+  get<T>(State: InputState<T> | InputState<T> | DerivedState<T, any>): T
+  get<T>(AsyncState: DerivedAsyncState<T, any>): Promise<T>
 }
 
 export type DerivedState<T = unknown, U = T> = {
   kind: 'State.Derived'
-  get: (ctx: DerivedStateContext) => T
-  set?: (ctx: DerivedStateContext, newState: U) => unknown
-}
-
-export type DerivedAsyncStateContext = {
-  get<T>(State: InputState<T, any> | ReducerState<T> | DerivedState<T, any>): T
-  get<T>(AsyncState: DerivedAsyncState<T, any>): Promise<T>
+  get: (ctx: SyncStateContext) => T
+  set?: (ctx: SyncStateContext, newState: U) => unknown
 }
 
 export type DerivedAsyncState<T = unknown, U = T> = {
   kind: 'State.DerivedAsync'
-  get: (ctx: DerivedAsyncStateContext) => Promise<T>
-  set?: (ctx: DerivedStateContext, newState: U) => unknown
+  get: (ctx: AsyncStateContext) => Promise<T>
+  set?: (ctx: SyncStateContext, newState: U) => unknown
 }
 
-export type StateDescription<T = unknown, U = T> =
-  | InputState<T, U>
-  | ReducerState<T>
-  | DerivedState<T, U>
-  | DerivedAsyncState<T, U>
+export type StateDescription<T = unknown, U = T> = InputState<T> | DerivedState<T, U> | DerivedAsyncState<T, U>
 
 export type StateType<T> = T extends StateDescription<infer U> ? U : never
 
 export const isInputState = <T = unknown>(arg: StateDescription<T>): arg is InputState<T> => {
   return arg.kind === 'State.Input'
-}
-
-export const isReducerState = <T = unknown>(arg: StateDescription<T>): arg is ReducerState<T> => {
-  return arg.kind === 'State.Reducer'
 }
 
 export const isDerivedState = <T = unknown>(arg: StateDescription<T>): arg is DerivedState<T> => {
@@ -147,33 +54,11 @@ export const isDerivedAsyncState = <T = unknown>(arg: StateDescription<T>): arg 
   return arg.kind === 'State.DerivedAsync'
 }
 
-type ReducerStateOptions = {
-  name?: string
-  devtools?: boolean
-  logger?: boolean
-}
-
-export function input<T, U = T>(initialState: T | (() => T)): InputState<T, U>
-
-export function input<S, RS extends Reducers<S>>(
-  initialState: S,
-  reducers: RS,
-  options?: ReducerStateOptions,
-): ReducerState<S, RS>
-
-export function input(initialState: unknown, reducers?: Reducers, options?: ReducerStateOptions) {
-  if (typeof reducers === 'undefined') {
-    return {
-      kind: 'State.Input',
-      initialState,
-    }
-  }
-
+export function input<S, RS extends Reducers<S>>(initialState: S | (() => S), reducers?: RS): InputState<S, RS> {
   return {
-    ...options,
-    kind: 'State.Reducer',
+    kind: 'State.Input',
     initialState,
-    reducers,
+    reducers: reducers || ({} as RS),
   }
 }
 
@@ -191,47 +76,10 @@ export const derivedAsync = <T, U = T>(options: Omit<DerivedAsyncState<T, U>, 'k
   }
 }
 
-export type EmptyStateValue = {
-  kind: 'StateValue.Empty'
-}
-
-export type DirtyStateValue<T = unknown> = {
-  kind: 'StateValue.Dirty'
-  dirtyValue: T
-}
-
-export type CleanStateValue<T = unknown> = {
-  kind: 'StateValue.Clean'
-  cleanValue: T
-}
-
-export type StateValue<T = unknown> = EmptyStateValue | DirtyStateValue<T> | CleanStateValue<T>
-
-export const isEmptyStateValue = (arg: StateValue): arg is EmptyStateValue => {
-  return arg?.kind === 'StateValue.Empty'
-}
-
-export const isDirtyStateValue = (arg: StateValue): arg is DirtyStateValue => {
-  return arg?.kind === 'StateValue.Dirty'
-}
-
-export const isCleanStateValue = (arg: StateValue): arg is CleanStateValue => {
-  return arg?.kind === 'StateValue.Clean'
-}
-
 export type InputBuildNode = {
   kind: 'BuildNode.Input'
   buildInfo: BuildInfo
   State: InputState
-  value: unknown
-  consumers: DerivableBuildNodeSet
-  isWip: boolean
-}
-
-export type ReducerBuildNode = {
-  kind: 'BuildNode.Reducer'
-  buildInfo: BuildInfo
-  State: ReducerState
   value: unknown
   consumers: DerivableBuildNodeSet
   isWip: boolean
@@ -257,18 +105,12 @@ export type DerivedAsyncBuildNode = {
   isWip: boolean
 }
 
-export type AtomBuildNode = InputBuildNode | ReducerBuildNode
-
 export type DerivableBuildNode = DerivedBuildNode | DerivedAsyncBuildNode
 
-export type BuildNode = AtomBuildNode | DerivableBuildNode
+export type BuildNode = InputBuildNode | DerivableBuildNode
 
 export const isInputBuildNode = (arg: BuildNode): arg is InputBuildNode => {
   return arg.kind === 'BuildNode.Input'
-}
-
-export const isReducerBuildNode = (arg: BuildNode): arg is ReducerBuildNode => {
-  return arg.kind === 'BuildNode.Reducer'
 }
 
 export const isDerivedBuildNode = (arg: BuildNode): arg is DerivedBuildNode => {
@@ -279,22 +121,19 @@ export const isDerivedAsyncBuildNode = (arg: BuildNode): arg is DerivedAsyncBuil
   return arg.kind === 'BuildNode.DerivedAsync'
 }
 
-export type AtomBuildNodeSet = Set<AtomBuildNode>
-
 export type DerivableBuildNodeSet = Set<DerivableBuildNode>
 
 export type BuildNodeSet = Set<BuildNode>
 
-export type BuildNodeStorage = {
+export type BuildStorage = {
   input: Map<InputState, InputBuildNode>
-  reducer: Map<ReducerState, ReducerBuildNode>
   derived: Map<DerivedState, DerivedBuildNode>
   derivedAsync: Map<DerivedAsyncState, DerivedAsyncBuildNode>
   promise: Map<DerivedAsyncState, Promise<unknown>>
 }
 
 export type BuildInfo = Store & {
-  storage: BuildNodeStorage
+  storage: BuildStorage
   dirtyBuildNodeSet: BuildNodeSet
 }
 
@@ -303,9 +142,9 @@ export type StoreSubscriber<T = unknown> = (state: T) => unknown
 export type StoreUnsubscribe = () => void
 
 export type Store = {
-  get: DerivedStateContext['get']
+  get: SyncStateContext['get']
   set<T, U = T>(State: StateDescription<T, U>, state: U): void
-  getActions<S, RS extends Reducers<S>>(ReducerState: ReducerState<S, RS>): ReducersToActions<RS>
+  getActions<S, RS extends Reducers<S>>(ReducerState: InputState<S, RS>): ReducersToActions<RS>
   subscribe<T>(State: StateDescription<T, any>, subscriber: StoreSubscriber<T>): StoreUnsubscribe
   publish(State: StateDescription<any>): void
 }
@@ -313,26 +152,6 @@ export type Store = {
 export const syncStateStore = <K, V>(target: Map<K, V>, source: Map<K, V>) => {
   for (let [key, value] of source) {
     target.set(key, value)
-  }
-}
-
-type Deferred<T = unknown> = {
-  promise: Promise<T>
-  resolve: (value: T | PromiseLike<T>) => void
-  reject: (reason?: any) => void
-}
-
-const createDeferred = <T = unknown>(): Deferred<T> => {
-  let resolve!: (value: T | PromiseLike<T>) => void
-  let reject!: (reason?: any) => void
-  let promise = new Promise<T>((a, b) => {
-    resolve = a
-    reject = b
-  })
-  return {
-    promise,
-    resolve,
-    reject,
   }
 }
 
@@ -350,22 +169,6 @@ const getInputBuildNode = (buildInfo: BuildInfo, State: InputState): InputBuildN
   }
   buildInfo.storage.input.set(State, inputBuildNode)
   return inputBuildNode
-}
-
-const getReducerBuildNode = (buildInfo: BuildInfo, State: ReducerState): ReducerBuildNode => {
-  if (buildInfo.storage.reducer.has(State)) {
-    return buildInfo.storage.reducer.get(State)!
-  }
-  let reducerBuildNode: ReducerBuildNode = {
-    kind: 'BuildNode.Reducer',
-    buildInfo,
-    State,
-    value: State.initialState,
-    consumers: new Set(),
-    isWip: false,
-  }
-  buildInfo.storage.reducer.set(State, reducerBuildNode)
-  return reducerBuildNode
 }
 
 const getDerivedBuildNode = (buildInfo: BuildInfo, State: DerivedState): DerivedBuildNode => {
@@ -432,10 +235,6 @@ const getBuildNode = (buildInfo: BuildInfo, State: StateDescription): BuildNode 
     return getInputBuildNode(buildInfo, State)
   }
 
-  if (isReducerState(State)) {
-    return getReducerBuildNode(buildInfo, State)
-  }
-
   if (isDerivedState(State)) {
     return getDerivedBuildNode(buildInfo, State)
   }
@@ -465,7 +264,7 @@ const compute = (buildNode: DerivableBuildNode) => {
   }
 
   if (isDerivedBuildNode(buildNode)) {
-    let derivedStateContext: DerivedStateContext = {
+    let derivedStateContext: SyncStateContext = {
       get: (State: StateDescription): any => {
         let provider = getBuildNode(buildNode.buildInfo, State)
         buildNode.providers.add(provider)
@@ -481,7 +280,7 @@ const compute = (buildNode: DerivableBuildNode) => {
       cleanValue: state,
     }
   } else if (isDerivedAsyncBuildNode(buildNode)) {
-    let derivedAsyncStateContext: DerivedAsyncStateContext = {
+    let derivedAsyncStateContext: AsyncStateContext = {
       get: (State: StateDescription): any => {
         let provider = getBuildNode(buildNode.buildInfo, State)
 
@@ -563,7 +362,7 @@ export const createStore = (): Store => {
     get: (State: StateDescription): any => {
       let buildNode = getBuildNode(buildInfo, State)
 
-      if (isInputBuildNode(buildNode) || isReducerBuildNode(buildNode)) {
+      if (isInputBuildNode(buildNode)) {
         return buildNode.value
       }
 
@@ -589,17 +388,6 @@ export const createStore = (): Store => {
       markDirty(buildNode)
 
       if (isInputBuildNode(buildNode)) {
-        if (buildNode.State.set) {
-          buildNode.State.set(
-            {
-              get: buildInfo.get,
-            },
-            state,
-          )
-        } else {
-          buildNode.value = state
-        }
-      } else if (isReducerBuildNode(buildNode)) {
         buildNode.value = state
       } else if (isDerivedBuildNode(buildNode)) {
         buildNode.State.set?.(
@@ -625,14 +413,14 @@ export const createStore = (): Store => {
 
       subscribers.add(subscriber as StoreSubscriber)
 
-      subscriber(store.get(State))
+      subscriber(store.get(State as any))
 
       return () => {
         subscribers.delete(subscriber as StoreSubscriber)
       }
     },
     publish: (State) => {
-      let state = store.get(State)
+      let state = store.get(State as any)
       let subscribers = subscriberStorage.get(State as StateDescription) ?? new Set()
       subscriberStorage.set(State as StateDescription, subscribers)
 

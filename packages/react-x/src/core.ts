@@ -19,11 +19,13 @@ export type InputState<S = unknown, RS extends Reducers<S> = Reducers<S>> = {
 export type SyncStateContext = {
   get<T>(State: InputState<T> | InputState<T> | DerivedState<T, any>): T
   get<T>(AsyncState: DerivedAsyncState<T, any>): AsyncState<T>
+  set<T, U = T>(State: StateDescription<T, U>, state: U): void
 }
 
 export type AsyncStateContext = {
   get<T>(State: InputState<T> | InputState<T> | DerivedState<T, any>): T
   get<T>(AsyncState: DerivedAsyncState<T, any>): Promise<T>
+  set: SyncStateContext['set']
 }
 
 export type DerivedState<T = unknown, U = T> = {
@@ -146,7 +148,9 @@ export type Store = {
   set<T, U = T>(State: StateDescription<T, U>, state: U): void
   getActions<S, RS extends Reducers<S>>(ReducerState: InputState<S, RS>): ReducersToActions<RS>
   subscribe<T>(State: StateDescription<T, any>, subscriber: StoreSubscriber<T>): StoreUnsubscribe
+  subscribeForAll(subscriber: () => unknown): StoreUnsubscribe
   publish(State: StateDescription<any>): void
+  publishForAll(): void
 }
 
 export const syncStateStore = <K, V>(target: Map<K, V>, source: Map<K, V>) => {
@@ -210,6 +214,10 @@ const getDerivedAsyncBuildNode = (buildInfo: BuildInfo, State: DerivedAsyncState
 }
 
 const markDirty = (buildNode: BuildNode) => {
+  if (buildNode.buildInfo.dirtyBuildNodeSet.has(buildNode)) {
+    return
+  }
+
   buildNode.isWip = true
 
   buildNode.buildInfo.dirtyBuildNodeSet.add(buildNode)
@@ -254,6 +262,10 @@ const publishBuildNodeSet = (buildInfo: BuildInfo) => {
   for (let buildNode of dirtyBuildNodeSet) {
     buildInfo.publish(buildNode.State)
   }
+
+  if (dirtyBuildNodeSet.size > 0) {
+    buildInfo.publishForAll()
+  }
 }
 
 const compute = (buildNode: DerivableBuildNode) => {
@@ -271,6 +283,7 @@ const compute = (buildNode: DerivableBuildNode) => {
         provider.consumers.add(buildNode)
         return buildNode.buildInfo.get(State as any)
       },
+      set: buildNode.buildInfo.set,
     }
 
     let state = buildNode.State.get(derivedStateContext)
@@ -316,6 +329,7 @@ const compute = (buildNode: DerivableBuildNode) => {
         }
         return Promise.resolve(asyncState.state)
       },
+      set: buildNode.buildInfo.set,
     }
 
     let promise = Promise.resolve(buildNode.State.get(derivedAsyncStateContext))
@@ -357,6 +371,9 @@ const compute = (buildNode: DerivableBuildNode) => {
 
 export const createStore = (): Store => {
   let subscriberStorage = new Map<StateDescription, Set<StoreSubscriber>>()
+  let subscribeAllStorage = new Set<() => unknown>()
+
+  let isWip = false
 
   let buildInfo: BuildInfo = {
     get: (State: StateDescription): any => {
@@ -387,12 +404,17 @@ export const createStore = (): Store => {
 
       markDirty(buildNode)
 
+      let prevIsWip = isWip
+
+      isWip = true
+
       if (isInputBuildNode(buildNode)) {
         buildNode.value = state
       } else if (isDerivedBuildNode(buildNode)) {
         buildNode.State.set?.(
           {
             get: buildInfo.get,
+            set: buildInfo.set,
           },
           state,
         )
@@ -400,12 +422,17 @@ export const createStore = (): Store => {
         buildNode.State.set?.(
           {
             get: buildInfo.get,
+            set: buildInfo.set,
           },
           state,
         )
       }
 
-      publishBuildNodeSet(buildInfo)
+      isWip = prevIsWip
+
+      if (!prevIsWip) {
+        publishBuildNodeSet(buildInfo)
+      }
     },
     subscribe: (State, subscriber) => {
       let subscribers = subscriberStorage.get(State as StateDescription) ?? new Set()
@@ -417,6 +444,18 @@ export const createStore = (): Store => {
 
       return () => {
         subscribers.delete(subscriber as StoreSubscriber)
+      }
+    },
+    subscribeForAll: (subscriber) => {
+      subscribeAllStorage.add(subscriber)
+      subscriber()
+      return () => {
+        subscribeAllStorage.delete(subscriber)
+      }
+    },
+    publishForAll: () => {
+      for (let subscriber of subscribeAllStorage) {
+        subscriber()
       }
     },
     publish: (State) => {
@@ -454,7 +493,9 @@ export const createStore = (): Store => {
     get: buildInfo.get,
     set: buildInfo.set,
     subscribe: buildInfo.subscribe,
+    subscribeForAll: buildInfo.subscribeForAll,
     publish: buildInfo.publish,
+    publishForAll: buildInfo.publishForAll,
     getActions: buildInfo.getActions,
   }
 

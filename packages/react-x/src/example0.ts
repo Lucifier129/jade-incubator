@@ -4,6 +4,19 @@ import { matchAsyncState } from './AsyncState'
 const A1 = input(10)
 const A2 = input(20)
 
+const A4 = derived({
+  get: (ctx) => {
+    return ctx.get(A1) + 1
+  },
+  set: (ctx, value: number) => {
+    ctx.set(A1, value - 1)
+    ctx.set(A1, value - 1)
+    ctx.set(A1, value - 1)
+    ctx.set(A1, value - 1)
+    ctx.set(A1, value - 1)
+  },
+})
+
 const A3 = input(0, {
   incre: (state: number, step = 1) => {
     return state + step
@@ -51,7 +64,7 @@ const C2 = derived({
 
 const store = createStore()
 
-const log = (name: string) => () => {
+store.subscribeForAll(() => {
   let c1 = store.get(C1)
   let c2 = store.get(C2)
   let a1 = store.get(A1)
@@ -70,22 +83,13 @@ const log = (name: string) => () => {
       c1,
       c2,
     }),
-    name,
   )
-}
-
-store.subscribe(A1, log('A1'))
-store.subscribe(A2, log('A2'))
-store.subscribe(A3, log('A3'))
-store.subscribe(B1, log('B1'))
-store.subscribe(B2, log('B2'))
-store.subscribe(C1, log('C1'))
-store.subscribe(C2, log('C2'))
-
-log('init')()
+})
 
 store.set(A1, 11)
 store.set(A2, 21)
+
+store.set(A4, 13)
 
 setTimeout(() => {
   console.log('setTimeout')

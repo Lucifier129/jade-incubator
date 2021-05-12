@@ -16,28 +16,27 @@ export type InputState<S = unknown, RS extends Reducers<S> = Reducers<S>> = {
   reducers: RS
 }
 
-export type SyncStateContext = {
+export type StateGetterContext = {
   get<T>(State: InputState<T> | InputState<T> | DerivedState<T, any>): T
   get<T>(AsyncState: DerivedAsyncState<T, any>): AsyncState<T>
-  set<T, U = T>(State: StateDescription<T, U>, state: U): void
+  asyncGet<T>(AsyncState: DerivedAsyncState<T, any>): Promise<T>
 }
 
-export type AsyncStateContext = {
-  get<T>(State: InputState<T> | InputState<T> | DerivedState<T, any>): T
-  get<T>(AsyncState: DerivedAsyncState<T, any>): Promise<T>
-  set: SyncStateContext['set']
+export type StateSetterContext = {
+  get: StateGetterContext['get']
+  set<T, U = T>(State: StateDescription<T, U>, state: U): void
 }
 
 export type DerivedState<T = unknown, U = T> = {
   kind: 'State.Derived'
-  get: (ctx: SyncStateContext) => T
-  set?: (ctx: SyncStateContext, newState: U) => unknown
+  get: (ctx: StateGetterContext) => T
+  set?: (ctx: StateSetterContext, newState: U) => unknown
 }
 
 export type DerivedAsyncState<T = unknown, U = T> = {
   kind: 'State.DerivedAsync'
-  get: (ctx: AsyncStateContext) => Promise<T>
-  set?: (ctx: SyncStateContext, newState: U) => unknown
+  get: (ctx: StateGetterContext) => Promise<T>
+  set?: (ctx: StateSetterContext, newState: U) => unknown
 }
 
 export type StateDescription<T = unknown, U = T> = InputState<T> | DerivedState<T, U> | DerivedAsyncState<T, U>
@@ -144,7 +143,7 @@ export type StoreSubscriber<T = unknown> = (state: T) => unknown
 export type StoreUnsubscribe = () => void
 
 export type Store = {
-  get: SyncStateContext['get']
+  get: StateGetterContext['get']
   set<T, U = T>(State: StateDescription<T, U>, state: U): void
   getActions<S, RS extends Reducers<S>>(ReducerState: InputState<S, RS>): ReducersToActions<RS>
   subscribe<T>(State: StateDescription<T, any>, subscriber: StoreSubscriber<T>): StoreUnsubscribe
@@ -275,64 +274,55 @@ const compute = (buildNode: DerivableBuildNode) => {
     provider.consumers.delete(buildNode)
   }
 
-  if (isDerivedBuildNode(buildNode)) {
-    let derivedStateContext: SyncStateContext = {
-      get: (State: StateDescription): any => {
-        let provider = getBuildNode(buildNode.buildInfo, State)
-        buildNode.providers.add(provider)
-        provider.consumers.add(buildNode)
-        return buildNode.buildInfo.get(State as any)
-      },
-      set: buildNode.buildInfo.set,
-    }
+  let stateGetterContext: StateGetterContext = {
+    get: (State: StateDescription): any => {
+      let provider = getBuildNode(buildNode.buildInfo, State)
+      buildNode.providers.add(provider)
+      provider.consumers.add(buildNode)
+      return buildNode.buildInfo.get(State as any)
+    },
+    asyncGet: (State): any => {
+      let provider = getBuildNode(buildNode.buildInfo, State)
 
-    let state = buildNode.State.get(derivedStateContext)
+      buildNode.providers.add(provider)
+      provider.consumers.add(buildNode)
+
+      let asyncState = buildNode.buildInfo.get(State)
+
+      if (isPendingStage(asyncState)) {
+        let deferred = createDeferred()
+        let promise = buildNode.buildInfo.storage.promise.get(State)!
+        let isOutdated = () => {
+          return buildNode.buildInfo.storage.promise.get(State) !== promise
+        }
+
+        promise
+          .then((state) => {
+            if (isOutdated()) return
+            deferred.resolve(state)
+          })
+          .catch((error) => {
+            if (isOutdated()) return
+            deferred.reject(error)
+          })
+
+        return deferred.promise
+      } else if (isErrorStage(asyncState)) {
+        return Promise.reject(asyncState.error)
+      }
+      return Promise.resolve(asyncState.state)
+    },
+  }
+
+  if (isDerivedBuildNode(buildNode)) {
+    let state = buildNode.State.get(stateGetterContext)
 
     buildNode.state = {
       kind: 'StateValue.Clean',
       cleanValue: state,
     }
   } else if (isDerivedAsyncBuildNode(buildNode)) {
-    let derivedAsyncStateContext: AsyncStateContext = {
-      get: (State: StateDescription): any => {
-        let provider = getBuildNode(buildNode.buildInfo, State)
-
-        buildNode.providers.add(provider)
-        provider.consumers.add(buildNode)
-
-        if (!isDerivedAsyncState(State)) {
-          return buildNode.buildInfo.get(State)
-        }
-
-        let asyncState = buildNode.buildInfo.get(State)
-
-        if (isPendingStage(asyncState)) {
-          let deferred = createDeferred()
-          let promise = buildNode.buildInfo.storage.promise.get(State)!
-          let isOutdated = () => {
-            return buildNode.buildInfo.storage.promise.get(buildNode.State) !== promise
-          }
-
-          promise
-            .then((state) => {
-              if (isOutdated()) return
-              deferred.resolve(state)
-            })
-            .catch((error) => {
-              if (isOutdated()) return
-              deferred.reject(error)
-            })
-
-          return deferred.promise
-        } else if (isErrorStage(asyncState)) {
-          return Promise.reject(asyncState.error)
-        }
-        return Promise.resolve(asyncState.state)
-      },
-      set: buildNode.buildInfo.set,
-    }
-
-    let promise = Promise.resolve(buildNode.State.get(derivedAsyncStateContext))
+    let promise = Promise.resolve(buildNode.State.get(stateGetterContext))
 
     let isOutdated = () => {
       return buildNode.buildInfo.storage.promise.get(buildNode.State) !== promise

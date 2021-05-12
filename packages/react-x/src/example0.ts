@@ -53,12 +53,18 @@ const C1 = derivedAsync({
 const C2 = derived({
   get: (ctx) => {
     let c1 = ctx.get(C1)
-
     return matchAsyncState(c1, {
       Pending: () => 'pending...',
       Error: (error) => `error: ${error.message}`,
-      Ok: (state) => `ok: ${state}`,
+      Ok: (state) => `c2: ${state}`,
     })
+  },
+})
+
+const C3 = derivedAsync({
+  get: async (ctx) => {
+    let c1 = await ctx.asyncGet(C1)
+    return `c3: ${c1}`
   },
 })
 
@@ -67,6 +73,7 @@ const store = createStore()
 store.subscribeForAll(() => {
   let c1 = store.get(C1)
   let c2 = store.get(C2)
+  let c3 = store.get(C3)
   let a1 = store.get(A1)
   let a2 = store.get(A2)
   let a3 = store.get(A3)
@@ -82,6 +89,7 @@ store.subscribeForAll(() => {
       b2,
       c1,
       c2,
+      c3,
     }),
   )
 })

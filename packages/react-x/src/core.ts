@@ -6,9 +6,9 @@ import {
   OkAsyncState,
   ErrorAsyncState,
 } from './AsyncState'
+import { StateValue, isCleanStateValue, CleanStateValue, EmptyStateValue, DirtyStateValue } from './StateValue'
 import { createDeferred } from './Deferred'
 import { Reducers, ReducersToActions, createActions } from './reducer'
-import { StateValue, isCleanStateValue } from './StateValue'
 
 export type InputState<S = unknown, RS extends Reducers<S> = Reducers<S>> = {
   kind: 'State.Input'
@@ -24,35 +24,69 @@ export type StateGetterContext = {
 
 export type StateSetterContext = {
   get: StateGetterContext['get']
-  set<T, U = T>(State: StateDescription<T, U>, state: U): void
+  set<T, U = T>(State: InputState<T> | WriteableDerivedState<T, U> | WriteableDerivedAsyncState<T, U>, state: U): void
 }
 
-export type DerivedState<T = unknown, U = T> = {
+export type ReadOnlyDerivedState<T = unknown> = {
   kind: 'State.Derived'
   get: (ctx: StateGetterContext) => T
-  set?: (ctx: StateSetterContext, newState: U) => unknown
 }
 
-export type DerivedAsyncState<T = unknown, U = T> = {
+export type WriteableDerivedState<T = unknown, U = T> = {
+  kind: 'State.Derived'
+  get: (ctx: StateGetterContext) => T
+  set: (ctx: StateSetterContext, newState: U) => unknown
+}
+
+export type DerivedState<T = unknown, U = T> = ReadOnlyDerivedState<T> | WriteableDerivedState<T, U>
+
+export type ReadOnlyDerivedAsyncState<T = unknown> = {
   kind: 'State.DerivedAsync'
   get: (ctx: StateGetterContext) => Promise<T>
-  set?: (ctx: StateSetterContext, newState: U) => unknown
 }
+
+export type WriteableDerivedAsyncState<T = unknown, U = T> = {
+  kind: 'State.DerivedAsync'
+  get: (ctx: StateGetterContext) => Promise<T>
+  set: (ctx: StateSetterContext, newState: U) => unknown
+}
+
+export type DerivedAsyncState<T = unknown, U = T> = ReadOnlyDerivedAsyncState<T> | WriteableDerivedAsyncState<T, U>
 
 export type StateDescription<T = unknown, U = T> = InputState<T> | DerivedState<T, U> | DerivedAsyncState<T, U>
 
 export type StateType<T> = T extends StateDescription<infer U> ? U : never
 
-export const isInputState = <T = unknown>(arg: StateDescription<T>): arg is InputState<T> => {
+export const isInputState = <T, U = T>(arg: StateDescription<T, U>): arg is InputState<T> => {
   return arg.kind === 'State.Input'
 }
 
-export const isDerivedState = <T = unknown>(arg: StateDescription<T>): arg is DerivedState<T> => {
+export const isDerivedState = <T, U = T>(arg: StateDescription<T, U>): arg is DerivedState<T, U> => {
   return arg.kind === 'State.Derived'
 }
 
-export const isDerivedAsyncState = <T = unknown>(arg: StateDescription<T>): arg is DerivedAsyncState<T> => {
+export const isDerivedAsyncState = <T, U = T>(arg: StateDescription<T, U>): arg is DerivedAsyncState<T, U> => {
   return arg.kind === 'State.DerivedAsync'
+}
+
+export const isReadOnlyDerivedState = <T, U = T>(arg: StateDescription<T, U>): arg is ReadOnlyDerivedState<T> => {
+  return isDerivedState(arg) && !('set' in arg)
+}
+
+export const isReadOnlyDerivedAsyncState = <T, U = T>(
+  arg: StateDescription<T, U>,
+): arg is ReadOnlyDerivedAsyncState<T> => {
+  return isDerivedAsyncState(arg) && !('set' in arg)
+}
+
+export const isWriteableDerivedState = <T, U = T>(arg: StateDescription<T, U>): arg is WriteableDerivedState<T, U> => {
+  return isDerivedState(arg) && 'set' in arg
+}
+
+export const isWriteableDerivedAsyncState = <T, U = T>(
+  arg: StateDescription<T, U>,
+): arg is WriteableDerivedAsyncState<T, U> => {
+  return isDerivedAsyncState(arg) && 'set' in arg
 }
 
 export function input<S, RS extends Reducers<S>>(initialState: S | (() => S), reducers?: RS): InputState<S, RS> {
@@ -63,14 +97,20 @@ export function input<S, RS extends Reducers<S>>(initialState: S | (() => S), re
   }
 }
 
-export const derived = <T, U = T>(options: Omit<DerivedState<T, U>, 'kind'>): DerivedState<T, U> => {
+export function derived<T, U = T>(options: Omit<WriteableDerivedState<T, U>, 'kind'>): WriteableDerivedState<T, U>
+export function derived<T>(options: Omit<ReadOnlyDerivedState<T>, 'kind'>): ReadOnlyDerivedState<T>
+export function derived<T, U = T>(options: Omit<DerivedState<T, U>, 'kind'>): DerivedState<T, U> {
   return {
     ...options,
     kind: 'State.Derived',
   }
 }
 
-export const derivedAsync = <T, U = T>(options: Omit<DerivedAsyncState<T, U>, 'kind'>): DerivedAsyncState<T, U> => {
+export function derivedAsync<T, U = T>(
+  options: Omit<WriteableDerivedAsyncState<T, U>, 'kind'>,
+): WriteableDerivedAsyncState<T, U>
+export function derivedAsync<T>(options: Omit<ReadOnlyDerivedAsyncState<T>, 'kind'>): ReadOnlyDerivedAsyncState<T>
+export function derivedAsync<T, U = T>(options: Omit<DerivedAsyncState<T, U>, 'kind'>): DerivedAsyncState<T, U> {
   return {
     ...options,
     kind: 'State.DerivedAsync',
@@ -144,7 +184,7 @@ export type StoreUnsubscribe = () => void
 
 export type Store = {
   get: StateGetterContext['get']
-  set<T, U = T>(State: StateDescription<T, U>, state: U): void
+  set: StateSetterContext['set']
   getActions<S, RS extends Reducers<S>>(ReducerState: InputState<S, RS>): ReducersToActions<RS>
   subscribe<T>(State: StateDescription<T, any>, subscriber: StoreSubscriber<T>): StoreUnsubscribe
   subscribeForAll(subscriber: () => unknown): StoreUnsubscribe
@@ -182,9 +222,7 @@ const getDerivedBuildNode = (buildInfo: BuildInfo, State: DerivedState): Derived
     kind: 'BuildNode.Derived',
     buildInfo,
     State,
-    state: {
-      kind: 'StateValue.Empty',
-    },
+    state: EmptyStateValue(),
     providers: new Set(),
     consumers: new Set(),
     isWip: false,
@@ -201,9 +239,7 @@ const getDerivedAsyncBuildNode = (buildInfo: BuildInfo, State: DerivedAsyncState
     kind: 'BuildNode.DerivedAsync',
     buildInfo,
     State,
-    state: {
-      kind: 'StateValue.Empty',
-    },
+    state: EmptyStateValue(),
     providers: new Set(),
     consumers: new Set(),
     isWip: false,
@@ -223,10 +259,7 @@ const markDirty = (buildNode: BuildNode) => {
 
   if (isDerivedBuildNode(buildNode) || isDerivedAsyncBuildNode(buildNode)) {
     if (isCleanStateValue(buildNode.state)) {
-      buildNode.state = {
-        kind: 'StateValue.Dirty',
-        dirtyValue: buildNode.state.cleanValue,
-      }
+      buildNode.state = DirtyStateValue(buildNode.state.cleanValue)
     }
   }
 
@@ -281,7 +314,7 @@ const compute = (buildNode: DerivableBuildNode) => {
       provider.consumers.add(buildNode)
       return buildNode.buildInfo.get(State as any)
     },
-    asyncGet: (State): any => {
+    asyncGet: (State) => {
       let provider = getBuildNode(buildNode.buildInfo, State)
 
       buildNode.providers.add(provider)
@@ -290,8 +323,14 @@ const compute = (buildNode: DerivableBuildNode) => {
       let asyncState = buildNode.buildInfo.get(State)
 
       if (isPendingStage(asyncState)) {
-        let deferred = createDeferred()
-        let promise = buildNode.buildInfo.storage.promise.get(State)!
+        type T = StateType<typeof State>
+        let deferred = createDeferred<T>()
+        let promise = buildNode.buildInfo.storage.promise.get(State)
+
+        if (!promise) {
+          throw new Error(`Unexpected asyncGet(...), no promise found`)
+        }
+
         let isOutdated = () => {
           return buildNode.buildInfo.storage.promise.get(State) !== promise
         }
@@ -299,7 +338,7 @@ const compute = (buildNode: DerivableBuildNode) => {
         promise
           .then((state) => {
             if (isOutdated()) return
-            deferred.resolve(state)
+            deferred.resolve(state as T)
           })
           .catch((error) => {
             if (isOutdated()) return
@@ -316,11 +355,7 @@ const compute = (buildNode: DerivableBuildNode) => {
 
   if (isDerivedBuildNode(buildNode)) {
     let state = buildNode.State.get(stateGetterContext)
-
-    buildNode.state = {
-      kind: 'StateValue.Clean',
-      cleanValue: state,
-    }
+    buildNode.state = CleanStateValue(state)
   } else if (isDerivedAsyncBuildNode(buildNode)) {
     let promise = Promise.resolve(buildNode.State.get(stateGetterContext))
 
@@ -328,10 +363,7 @@ const compute = (buildNode: DerivableBuildNode) => {
       return buildNode.buildInfo.storage.promise.get(buildNode.State) !== promise
     }
 
-    buildNode.state = {
-      kind: 'StateValue.Clean',
-      cleanValue: PendingAsyncState(),
-    }
+    buildNode.state = CleanStateValue(PendingAsyncState())
 
     buildNode.buildInfo.storage.promise.set(buildNode.State, promise)
 
@@ -339,19 +371,17 @@ const compute = (buildNode: DerivableBuildNode) => {
       .then((state) => {
         if (isOutdated()) return
         markDirty(buildNode)
-        buildNode.state = {
-          kind: 'StateValue.Clean',
-          cleanValue: OkAsyncState(state),
-        }
+
+        buildNode.state = CleanStateValue(OkAsyncState(state))
+
         publishBuildNodeSet(buildNode.buildInfo)
       })
       .catch((error) => {
         if (isOutdated()) return
         markDirty(buildNode)
-        buildNode.state = {
-          kind: 'StateValue.Clean',
-          cleanValue: ErrorAsyncState(error),
-        }
+
+        buildNode.state = CleanStateValue(ErrorAsyncState(error))
+
         publishBuildNodeSet(buildNode.buildInfo)
       })
   }
@@ -400,16 +430,16 @@ export const createStore = (): Store => {
 
       if (isInputBuildNode(buildNode)) {
         buildNode.value = state
-      } else if (isDerivedBuildNode(buildNode)) {
-        buildNode.State.set?.(
+      } else if (isWriteableDerivedState(State)) {
+        State.set(
           {
             get: buildInfo.get,
             set: buildInfo.set,
           },
           state,
         )
-      } else if (isDerivedAsyncBuildNode(buildNode)) {
-        buildNode.State.set?.(
+      } else if (isWriteableDerivedAsyncState(State)) {
+        State.set(
           {
             get: buildInfo.get,
             set: buildInfo.set,

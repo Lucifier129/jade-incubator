@@ -14,25 +14,6 @@ export type OkAsyncState<T = unknown> = {
   state: T
 }
 
-export type AsyncStateVisitors<T, R> = {
-  Pending: () => R
-  Error: (error: Error) => R
-  Ok: (value: T) => R
-}
-
-export const matchAsyncState = <T, R>(asyncState: AsyncState<T>, visitors: AsyncStateVisitors<T, R>): R => {
-  if (asyncState.kind === 'AsyncState.Pending') {
-    return visitors.Pending()
-  }
-  if (asyncState.kind === 'AsyncState.Error') {
-    return visitors.Error(asyncState.error)
-  }
-  if (asyncState.kind === 'AsyncState.Ok') {
-    return visitors.Ok(asyncState.state)
-  }
-  throw new Error(`Unexpected async state: ${asyncState}`)
-}
-
 export const PendingAsyncState = (): PendingAsyncState => {
   return {
     kind: 'AsyncState.Pending',
@@ -63,4 +44,23 @@ export const isErrorStage = <T>(input: AsyncState<T>): input is ErrorAsyncState 
 
 export const isOkStage = <T>(input: AsyncState<T>): input is OkAsyncState<T> => {
   return input.kind === 'AsyncState.Ok'
+}
+
+export type AsyncStateVisitors<T, R> = {
+  Pending: () => R
+  Error: (error: Error) => R
+  Ok: (value: T) => R
+}
+
+export const matchAsyncState = <T, R>(asyncState: AsyncState<T>, visitors: AsyncStateVisitors<T, R>): R => {
+  if (isPendingStage(asyncState)) {
+    return visitors.Pending()
+  }
+  if (isErrorStage(asyncState)) {
+    return visitors.Error(asyncState.error)
+  }
+  if (isOkStage(asyncState)) {
+    return visitors.Ok(asyncState.state)
+  }
+  throw new Error(`Unexpected async state: ${asyncState}`)
 }

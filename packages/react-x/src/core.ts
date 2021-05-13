@@ -1,3 +1,5 @@
+import LRUCache from 'lru-cache'
+
 import {
   AsyncState,
   isPendingStage,
@@ -176,6 +178,7 @@ export type BuildStorage = {
 export type BuildInfo = Store & {
   storage: BuildStorage
   dirtyBuildNodeSet: BuildNodeSet
+  status: 'lock' | 'unlock'
 }
 
 export type StoreSubscriber<T = unknown> = (state: T) => unknown
@@ -190,6 +193,10 @@ export type Store = {
   subscribeForAll(subscriber: () => unknown): StoreUnsubscribe
   publish(State: StateDescription<any>): void
   publishForAll(): void
+  lock: () => void
+  unlock: () => void
+  batch: (f: () => unknown) => void
+  commit: () => void
 }
 
 export const syncStateStore = <K, V>(target: Map<K, V>, source: Map<K, V>) => {
@@ -393,9 +400,7 @@ export const createStore = (): Store => {
   let subscriberStorage = new Map<StateDescription, Set<StoreSubscriber>>()
   let subscribeAllStorage = new Set<() => unknown>()
 
-  let isWip = false
-
-  let buildInfo: BuildInfo = {
+  let store: Store = {
     get: (State: StateDescription): any => {
       let buildNode = getBuildNode(buildInfo, State)
 
@@ -424,9 +429,9 @@ export const createStore = (): Store => {
 
       markDirty(buildNode)
 
-      let prevIsWip = isWip
+      let prevStatus = buildInfo.status
 
-      isWip = true
+      buildInfo.status = 'lock'
 
       if (isInputBuildNode(buildNode)) {
         buildNode.value = state
@@ -448,9 +453,9 @@ export const createStore = (): Store => {
         )
       }
 
-      isWip = prevIsWip
+      buildInfo.status = prevStatus
 
-      if (!prevIsWip) {
+      if (prevStatus === 'unlock') {
         publishBuildNodeSet(buildInfo)
       }
     },
@@ -487,15 +492,6 @@ export const createStore = (): Store => {
         subscriber(state)
       }
     },
-    storage: {
-      input: new Map(),
-      reducer: new Map(),
-      derived: new Map(),
-      derivedAsync: new Map(),
-      promise: new Map(),
-    },
-    dirtyBuildNodeSet: new Set(),
-
     getActions: (State) => {
       let actions = createActions(State.reducers, (action) => {
         let reducer = State.reducers[action.type]
@@ -507,16 +503,37 @@ export const createStore = (): Store => {
 
       return actions
     },
+    lock: () => {
+      buildInfo.status = 'lock'
+    },
+    unlock: () => {
+      buildInfo.status = 'unlock'
+    },
+    commit: () => {
+      publishBuildNodeSet(buildInfo)
+    },
+    batch: (f) => {
+      buildInfo.lock()
+      try {
+        f()
+      } finally {
+        buildInfo.unlock()
+        buildInfo.commit()
+      }
+    },
   }
 
-  let store: Store = {
-    get: buildInfo.get,
-    set: buildInfo.set,
-    subscribe: buildInfo.subscribe,
-    subscribeForAll: buildInfo.subscribeForAll,
-    publish: buildInfo.publish,
-    publishForAll: buildInfo.publishForAll,
-    getActions: buildInfo.getActions,
+  let buildInfo: BuildInfo = {
+    ...store,
+    status: 'unlock',
+    storage: {
+      input: new Map(),
+      reducer: new Map(),
+      derived: new Map(),
+      derivedAsync: new Map(),
+      promise: new Map(),
+    },
+    dirtyBuildNodeSet: new Set(),
   }
 
   return store
@@ -526,4 +543,73 @@ export const delay = (time: number) => {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, time)
   })
+}
+
+export type JsonType =
+  | number
+  | string
+  | boolean
+  | null
+  | undefined
+  | JsonType[]
+  | {
+      toJSON(): string
+    }
+  | {
+      [key: string]: JsonType
+    }
+
+export type StateProducer<T extends StateDescription = StateDescription, U extends JsonType = JsonType, O = void> = (
+  arg: U,
+  options?: O,
+) => T
+
+export type StateFactory<T extends StateDescription, U extends JsonType, O = void> = StateProducer<T, U, O> & {
+  clear: () => void
+  delete: (arg: U) => boolean
+}
+
+export type StateFactoryOptions<U extends JsonType> = {
+  max?: number
+  key?: (arg: U) => string
+}
+
+export const factory = <T extends StateDescription<any, any>, U extends JsonType, O = void>(
+  producer: StateProducer<T, U, O>,
+  options?: StateFactoryOptions<U>,
+): StateFactory<T, U, O> => {
+  let config: Required<StateFactoryOptions<U>> = {
+    max: Infinity,
+    key: (arg) => JSON.stringify(arg),
+    ...options,
+  }
+  let cache = new LRUCache<string, T>({
+    max: config.max,
+  })
+
+  let fn: StateFactory<T, U, O> = ((arg) => {
+    let key = config.key(arg)
+
+    if (cache.has(key)) {
+      return cache.get(key)!
+    }
+
+    let value = producer(arg)
+    cache.set(key, value)
+
+    return value
+  }) as StateFactory<T, U, O>
+
+  fn.clear = () => {
+    cache.reset()
+  }
+
+  fn.delete = (arg) => {
+    let key = config.key(arg)
+    let hasValue = cache.has(key)
+    cache.del(key)
+    return hasValue
+  }
+
+  return fn
 }

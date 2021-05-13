@@ -23,10 +23,12 @@
   },
   "devDependencies": {
     "ts-node": "^9.1.1",
-    "@types/redux-logger": "^3.0.8"
+    "@types/redux-logger": "^3.0.8",
+    "@types/lru-cache": "^5.1.0"
   },
   "dependencies": {
     "tslib": "^2.1.0",
+    "lru-cache": "^6.0.0",
     "farrow-schema": "^1.10.1",
     "farrow-module": "^1.8.0",
     "redux": "^4.1.0",
